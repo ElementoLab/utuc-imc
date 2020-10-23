@@ -22,7 +22,7 @@ if not f.exists():
 
 
 # # Signal per channel for all ROIs
-for c in tqdm(channels_include):
+for c in tqdm(channel_include):
     f = output_dir / prj.name + f".all_rois.{c}.pdf"
     if f.exists():
         continue
@@ -38,16 +38,6 @@ for roi in prj.rois:
     if f.exists():
         continue
     fig = roi.plot_channels(roi.channel_labels.tolist())
-    fig.savefig(f, **figkws)
-    plt.close(fig)
-
-
-for roi in prj.rois:
-    f = output_dir / roi.name + ".mean.svgz"
-    # if f.exists():
-    # continue
-    fig, ax = plt.subplots(1, 1, figsize=(12, 12))
-    roi.plot_channel("mean", ax=ax)
     fig.savefig(f, **figkws)
     plt.close(fig)
 

@@ -11,15 +11,11 @@ from imc.types import Path
 # Set up project
 prj = Project(name="utuc-imc")
 chs = prj.rois[0].channel_labels
-include = pd.Series(~chs.str.contains("BCK|EMPTY|80Ar|Xe").values, index=chs)
-exclude = ~include
+chs.index = chs.values
+channel_exclude = chs[chs.str.contains("BCK|EMPTY|80Ar|Xe")].tolist()
 for roi in prj.rois:
-    roi.channels_include = include
-    roi.channels_exclude = exclude
-
-channels_include = include[include].index.to_series()
-channels_exclude = exclude[exclude].index.to_series()
-
+    roi.set_channel_exclude(channel_exclude)
+channel_include = ~chs.isin(channel_exclude)
 
 # Directories
 metadata_dir = Path("metadata")
