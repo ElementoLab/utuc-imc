@@ -2,6 +2,7 @@
 processed/
 results/
 manuscript/
+lib/
 
 *.tiff
 

@@ -43,26 +43,31 @@ for roi in prj.rois:
 
 
 # Plot combination of markers
-output_dir = results_dir / "marker_illustration"
-output_dir.mkdir(exist_ok=True, parents=True)
-
-
-def plot_illustrations(roi):
+def plot_illustrations(roi, overwrite: bool = True, **kws):
     for colors, chs in illustration_channel_list:
         label = "-".join([f"{k}:{v}" for k, v in zip(colors, chs)])
         _f = output_dir / roi.name + f".{label}.pdf"
-        if _f.exists():
+        if _f.exists() and not overwrite:
             continue
-        _fig = roi.plot_channels(chs, output_colors=colors, merged=True)
+        _fig = roi.plot_channels(
+            chs, output_colors=colors if colors else None, merged=True, **kws
+        )
         _fig.savefig(_f, dpi=600, bbox_inches="tight")
         plt.close(_fig)
 
 
+# Markers
+illustration_channel_list = json.load(
+    open(metadata_dir / "illustration_markers.json")
+)
+
+output_dir = results_dir / "marker_illustration"
+output_dir.mkdir(exist_ok=True, parents=True)
 parmap.map(plot_illustrations, prj.rois)
 
 
 # # Segmentation
-output_dir = results_dir / "segmentation_illustration"
+output_dir = results_dir / "illustration" / "segmentation"
 output_dir.mkdir(exist_ok=True, parents=True)
 for sample in prj.samples:
     f = output_dir / sample.name + ".probabilities_and_segmentation.pdf"
