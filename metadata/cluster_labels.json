@@ -1,9 +1,9 @@
 {
     "1.0": {
         "1": "01 - Macrophages (CD16+, CD68+, CD163+, CD206+, CD11c+, CD4dim)",
-        "2": "02 - Endothelial cells (CD31+, Vimentin+, AlphaSMAdim)",
-        "3": "03 - CD4 T-cells (CD45+, CD3+, CD4+, CD45RO+, FoxP3dim)",
-        "4": "04 - Smooth muscle cells (AlphaSMA+, ColtypeIdim)",
+        "2": "02 - Endothelial cells (CD31+, Vimentin+)",
+        "3": "03 - CD4 T-cells (CD45+, CD3+, CD4+, CD45RO+, FoxP3+)",
+        "4": "04 - Smooth muscle (AlphaSMA+, ColtypeI+)",
         "5": "05 - Tumor cells (ECadherindim)",
         "6": "06 - Tumor cells (ECadherindim)",
         "7": "07 - Tumor cells (KRT5+)",
@@ -14,14 +14,13 @@
         "12": "12 - Tumor cells (KRT5dim)",
         "13": "13 - Tumor cells (ECadherin+)",
         "14": "14 - Tumor cells (PanKeratinC11+, ECadherin+, CD31dim, PD1dim, FoxP3dim)",
-        "15": "15 - Tumor cells (Ki67+)",
+        "15": "15 - Tumor cells (KRT5dim, Ki67+)",
         "16": "16 - Tumor cells (KRT5+, ECadherin+)",
-        "17": "17 - Tumor cells (ECadherindim, GATA3+, Ki67dim)",
+        "17": "17 - Tumor cells (GATA3+, ECadherindim, Ki67dim)",
         "18": "18 - Fibroblasts (ColtypeI+)",
         "19": "19 - Immune proliferating cells (Ki67+)",
         "20": "20 - Myeloid-derived suppressor cells (CD11b+, GranzymeB+, CD68dim)",
-        "21": "21 - Tumor cells (KRT5+, ECadherin+)",
-        "22": "22 - Macrophages (CD16+, CD163dim)"
+        "21": "21 - CD8 T-cells (CD3+, CD8a+, CD45RO+)"
     },
     "1.5": {
         "1": "01 - Tumor cells (KRT5+, Vimentindim, PDL1+)",

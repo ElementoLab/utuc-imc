@@ -10,13 +10,14 @@ from anndata import AnnData  # type: ignore[import]
 import scanpy as sc  # type: ignore[import]
 from numpy_groupies import aggregate
 from joblib import parallel_backend
+import pingouin as pg
 
 from imc.graphics import get_grid_dims, rasterize_scanpy
 from imc.utils import align_channels_by_name
 
-from seaborn_extensions import swarmboxenplot
+from seaborn_extensions import swarmboxenplot, clustermap
 
-from src.init import *
+from src.config import *
 
 # from src.operations import (
 #     plot_umap,
@@ -87,7 +88,7 @@ if not h5ad_file.exists():
     for cres in ann.obs.columns.to_series().filter(like="cluster"):
         if ann.obs[cres].astype(int).min() == 0:
             ann.obs[cres] = (ann.obs[cres].astype(int) + 1).astype(str).values
-    sc.tl.umap(ann)
+    sc.tl.umap(ann, gamma=20)
     sc.tl.diffmap(ann)
     ann.write_h5ad(h5ad_file)
 
@@ -130,13 +131,30 @@ for algo in ["umap", "pca", "diffmap"]:
     f = getattr(sc.pl, algo)
 
     # # all markers
-    axes = f(
+    fig = f(
         a,
         color=attributes + ["sample"] + a.var.index.tolist(),
         use_raw=False,
         show=False,
-    )
-    fig = axes[0].figure
+    )[0].figure
+    rasterize_scanpy(fig)
+    fig.savefig(output_dir / f"{algo}.all_markers.clipped.svgz", **figkws)
+
+    fig = f(
+        a,
+        color=f"cluster_{res}_labels",
+        use_raw=False,
+        show=False,
+    ).figure
+    rasterize_scanpy(fig)
+    fig.savefig(output_dir / f"{algo}.all_markers.clipped.svgz", **figkws)
+
+    fig = f(
+        a,
+        color=f"metacluster_{res}_labels",
+        use_raw=False,
+        show=False,
+    ).figure
     rasterize_scanpy(fig)
     fig.savefig(output_dir / f"{algo}.all_markers.clipped.svgz", **figkws)
 
@@ -171,7 +189,12 @@ for algo in ["umap", "pca", "diffmap"]:
         d = pd.get_dummies(a.obs[f"cluster_{res}"])
         d.columns = "C" + d.columns.astype(str).str.zfill(2)
         aa.obs = aa.obs.join(d)
-        axes = f(aa, color=d.columns.tolist(), cmap="binary", show=False,)
+        axes = f(
+            aa,
+            color=d.columns.tolist(),
+            cmap="binary",
+            show=False,
+        )
         fig = axes[0].figure
         rasterize_scanpy(fig)
         fig.savefig(
@@ -182,67 +205,79 @@ for algo in ["umap", "pca", "diffmap"]:
 
 # Plot mean phenotypes for each cluster
 for res in cl_resolutions + cl_labels:  # type: ignore
-    df = a.to_df().groupby(a.obs[f"cluster_{res}"]).mean()
+    df = a.to_df().groupby(a.obs[f"cluster_{res}_labels"]).mean()
+    # df = df.loc[df.index.str.contains("-"), :]
 
     # keep clusters with only 500 cells
-    total = a.obs[f"cluster_{res}"].value_counts().rename("cells")
+    total = a.obs[f"cluster_{res}_labels"].value_counts().rename("cells")
     total = total.loc[lambda x: x > min_cells_per_cluster]
-    att_count = (
-        a.obs.groupby(attributes)[f"cluster_{res}"]
-        .value_counts()
-        .rename("cells")
-    )
-    att_count = (
-        att_count.reset_index()
-        .pivot_table(
-            index=f"cluster_{res}",
-            columns=attributes,
-            values="cells",
-            aggfunc=sum,
-            fill_value=0,
+    _r = list()
+    for attr in attributes:
+        q = (
+            a.obs.groupby(attr)[f"cluster_{res}_labels"]
+            .value_counts(normalize=False)
+            .unstack()
         )
-        .loc[total.index]
-    )
-    df = df.loc[total.index]
+        q.index = q.index.tolist()
+        _r.append(q / q.sum())
+    att_count = pd.concat(_r, axis=0).T
+
+    df = df.reindex(total.index).dropna()
 
     kws = dict(
         robust=True,
         yticklabels=True,
         cbar_kws=dict(label="Z-score"),
-        row_colors=att_count.join(total),
-        figsize=(15, 10),
+        # row_colors=att_count.join(total),
+        config="z",
+        figsize=(8, 4),
         dendrogram_ratio=0.075,
         metric="correlation",
     )
-    grid = sns.clustermap(df, **kws)
-    grid.savefig(output_dir / f"cluster_mean_{res}.clustermap.svg")
+    grid = clustermap(df, **kws)
+    grid.savefig(
+        output_dir / f"cluster_mean_cluster_{res}.clustermap.svg", **figkws
+    )
 
     for pat, label in [("", "all"), (r"\(", "no_struct")]:
         p = df.loc[:, df.columns.str.contains(pat)]
-        grid = sns.clustermap(p, z_score=1, center=0, cmap="RdBu_r", **kws)
+        grid = clustermap(p, **kws)
         grid.savefig(
-            output_dir / f"cluster_mean_{res}.clustermap.{label}.z_score.svg"
+            output_dir
+            / f"cluster_mean_cluster_{res}.clustermap.{label}.z_score.svg",
+            **figkws,
         )
 
-        grid2 = sns.clustermap(
-            p, z_score=1, center=0, cmap="RdBu_r", row_cluster=False, **kws
-        )
+        grid2 = clustermap(p, row_cluster=False, **kws)
         grid2.savefig(
             output_dir
-            / f"cluster_mean_{res}.clustermap.{label}.z_score.cluster_sorted.svg"
+            / f"cluster_mean_cluster_{res}.clustermap.{label}.z_score.cluster_sorted.svg",
+            **figkws,
         )
 
-    fig, ax = plt.subplots(1, 1, figsize=(4, 10))
-    sns.heatmap(
-        att_count.iloc[grid.dendrogram_row.reordered_ind] + 1,
-        cmap="PuOr_r",
-        ax=ax,
-        norm=mpl.colors.LogNorm(),
-        cbar_kws=dict(label="Cells"),
-    )
-    fig.savefig(
-        output_dir / f"cluster_mean_{res}.clustermap.attribute_abundance.svg"
-    )
+    for attr in attributes:
+        clrs = colors.get(attr)
+
+        n = 2 ** 8
+        x = np.linspace(0, n, n)
+        c = np.moveaxis(np.vstack([x, x, x]), 0, -1)
+        a = c.reshape((n, 3)) * clrs[0] / n
+        b = c.reshape((n, 3)) * clrs[1] / n
+        cmap = mpl.colors.ListedColormap(a.tolist()[::-1] + b.tolist())
+        fig, ax = plt.subplots(1, 1, figsize=(4, 10))
+        sns.heatmap(
+            att_count.iloc[grid.dendrogram_row.reordered_ind] * 100,
+            cmap=cmap,
+            ax=ax,
+            center=50,
+            # norm=mpl.colors.LogNorm(),
+            cbar_kws=dict(label=f"Percentage {attr}"),
+        )
+        fig.savefig(
+            output_dir
+            / f"cluster_mean_{res}.clustermap.attribute_abundance.{attr.replace('/', '_')}.svg",
+            **figkws,
+        )
 
 
 # Choose one clustering resolution
@@ -250,35 +285,45 @@ res = 1.5
 
 # Let's generate some dataframes that will be useful later:
 # # counts of cells per image, per cluster
-roi_counts = (
-    ann.obs[["roi", f"cluster_{res}_labels"]]
-    .assign(count=1)
-    .pivot_table(
-        index="roi",
-        columns=f"cluster_{res}_labels",
-        values="count",
-        aggfunc=sum,
-        fill_value=0,
+if not counts_file.exists():
+    roi_counts = (
+        ann.obs[["roi", f"cluster_{res}_labels"]]
+        .assign(count=1)
+        .pivot_table(
+            index="roi",
+            columns=f"cluster_{res}_labels",
+            values="count",
+            aggfunc=sum,
+            fill_value=0,
+        )
     )
-)
-roi_counts = roi_counts.loc[:, ~roi_counts.columns.str.contains(r"\?")]
-roi_counts.to_parquet(counts_file)
+    roi_counts = roi_counts.loc[
+        :,
+        (~roi_counts.columns.str.contains(r"\?"))
+        & (roi_counts.columns.str.contains(r"\(")),
+    ]
+    roi_counts.to_parquet(counts_file)
+roi_counts = pd.read_parquet(counts_file)
 
 # # counts of cells per image, per cluster, for meta-clusters
-agg_counts = (
-    roi_counts.T.groupby(
-        roi_counts.columns.str.extract(r"\d+ - (.*) \(")[0].values
+if not counts_agg_file.exists():
+    agg_counts = (
+        roi_counts.T.groupby(
+            roi_counts.columns.str.extract(r"\d+ - (.*) \(")[0].values
+        )
+        .sum()
+        .T
     )
-    .sum()
-    .T
-)
-agg_counts.to_parquet(counts_agg_file)
+    agg_counts.to_parquet(counts_agg_file)
+agg_counts = pd.read_parquet(counts_agg_file)
 
 # # Area per image
-roi_areas = pd.Series(
-    {r.name: r.area for r in prj.rois}, name="area"
-).rename_axis("roi")
-roi_areas.to_csv(roi_areas_file)
+if not roi_areas_file.exists():
+    roi_areas = pd.Series(
+        {r.name: r.area for r in prj.rois}, name="area"
+    ).rename_axis("roi")
+    roi_areas.to_csv(roi_areas_file)
+roi_areas = pd.read_csv(roi_areas_file, index_col=0, squeeze=True)
 
 # # counts of cells per sample, per cluster
 sample_counts = (
@@ -295,10 +340,12 @@ sample_counts = (
 sample_counts = sample_counts.loc[:, ~sample_counts.columns.str.contains(r"\?")]
 
 # # Area per sample
-sample_areas = pd.Series(
-    {s.name: sum([r.area for r in s]) for s in prj}, name="area"
-)
-sample_areas.to_csv(sample_areas_file)
+if not sample_areas_file.exists():
+    sample_areas = pd.Series(
+        {s.name: sum([r.area for r in s]) for s in prj}, name="area"
+    )
+    sample_areas.to_csv(sample_areas_file)
+sample_areas = pd.read_csv(sample_areas_file, index_col=0)
 
 
 # Plot fraction of cells per ROI/Sample and grouped by disease/phenotype
@@ -524,6 +571,7 @@ stats.to_csv(
 
 # plot percentages
 c = (agg_counts.T / roi_areas).T * 1e6
+perc = ((agg_counts.T / agg_counts.sum(1)) * 100).T
 
 fig, axes = plt.subplots(2, 5)
 for x, ax in zip(c.columns, axes.flat):
@@ -536,7 +584,6 @@ for x, ax in zip(c.columns, axes.flat):
     )
 fig.savefig(results_dir / "abundance.absolute.svg", **figkws)
 
-perc = ((agg_counts.T / agg_counts.sum(1)) * 100).T
 
 fig, axes = plt.subplots(2, 5)
 for x, ax in zip(perc.columns, axes.flat):
@@ -566,52 +613,315 @@ p2 = p2.drop(["Tumor cells"] + structural, 1)
 p2 = (p2.T / p2.sum(1)).T.reindex(p1.index) * 100
 p2.plot(kind="bar", stacked=True, ax=axes[1])
 fig.savefig(
-    results_dir / "cell_type_composition.percentage.stacked_barplot.svg"
+    results_dir / "cell_type_composition.percentage.stacked_barplot.svg",
+    **figkws,
 )
 
 
 # Plot score vs CD8
-sig = "Tcell Inflamation Signature ssGSEA ES"
-
 clinical = pd.read_csv(metadata_dir / "samples.csv", index_col=0)
 
-c1 = c.groupby(c.index.str.extract("(.*)-")[0].values).mean()
-tp = c1.join(clinical[sig]).dropna()
+sigs = [
+    ("ES", "Tcell Inflamation Signature ssGSEA ES"),
+    ("ZS", "Tcell Inflamation Signature (z-score)"),
+]
 
-fig, axes = plt.subplots(3, 3, figsize=(7, 7))
-axes = axes.flatten()
-for i, col in enumerate(c1.columns):
-    axes[i].scatter(tp[sig], tp[col])
-    axes[i].set_title(col)
-fig.savefig(
-    results_dir / "ssGSEA_score.correlation_with_cell_types.absolute.svg"
+
+for lab, sig in sigs:
+    c1 = c.groupby(c.index.str.extract("(.*)-")[0].values).mean()
+    tp = c1.join(clinical[sig]).dropna()
+
+    fig, axes = plt.subplots(3, 3, figsize=(3 * 3, 3 * 3), sharex=True)
+    axes = axes.flatten()
+    for i, col in enumerate(c1.columns):
+        statsres = pg.corr(tp[sig], tp[col]).squeeze()
+        axes[i].scatter(tp[sig], tp[col])
+        sns.regplot(tp[sig], tp[col], ax=axes[i])
+        axes[i].set(
+            title=f"{col}\nr={statsres['r']:.3f}\np={statsres['p-val']:.3f}",
+            ylabel=None,
+        )
+
+    fig.savefig(
+        results_dir
+        / f"ssGSEA_score.{lab}.correlation_with_cell_types.absolute.svg"
+    )
+
+    p1 = perc.groupby(perc.index.str.extract("(.*)-")[0].values).mean()
+    tp = p1.join(clinical[sig]).dropna()
+    fig, axes = plt.subplots(3, 3, figsize=(3 * 3, 3 * 3), sharex=True)
+    axes = axes.flatten()
+    for i, col in enumerate(p1.columns):
+        statsres = pg.corr(tp[sig], tp[col]).squeeze()
+        axes[i].scatter(tp[sig], tp[col])
+        sns.regplot(tp[sig], tp[col], ax=axes[i])
+        axes[i].set(
+            title=f"{col}\nr={statsres['r']:.3f}\np={statsres['p-val']:.3f}",
+            ylabel=None,
+        )
+    fig.savefig(
+        results_dir
+        / f"ssGSEA_score.{lab}.correlation_with_cell_types.percentage.svg"
+    )
+
+
+#
+
+#
+
+# Compare expression between phenotypes
+tp = ann.var.index.to_series()
+tp = tp.filter(regex=r"\(").filter(regex="^(?!.*DNA)")
+
+
+"PanKeratinC11(Nd148)"
+
+"CD8a(Dy162)"
+
+
+p = ann.copy()
+sc.pp.scale(p)
+# p = p[p.to_df()['CD8a(Dy162)'].sort_values().index, :]
+for attr in attributes:
+    for cl in ann.obs["metacluster_1.5_labels"].unique():
+        x = p[p.obs["metacluster_1.5_labels"] == cl, :]
+        ax = sc.pl.heatmap(
+            x,
+            var_names=tp,
+            groupby=attr,
+            use_raw=False,
+            vmax=4,
+            vmin=-4,
+            cmap="RdBu_r",
+            show=False,
+        )["heatmap_ax"]
+        ax.set_title(cl)
+        fig = ax.figure
+        fig.savefig(
+            output_dir
+            / f"expression_diff.{cl}.{attr.replace('/', '')}.heatmap.svg",
+            **figkws,
+        )
+        plt.close("all")
+
+    sc.tl.rank_genes_groups(x, attributes[i])
+
+    sc.pl.rank_genes_groups(x, show=False)
+    ax = plt.gca()
+    fig = ax.figure
+    fig.suptitle(cl)
+    fig.savefig(output_dir / f"expression_diff.{cl}.rank.svg", **figkws)
+
+
+cl = "Macrophages"
+x = p[p.obs["metacluster_1.5_labels"] == cl, :]
+ax = sc.pl.violin(
+    x,
+    keys=["CD163(Sm147)"],
+    groupby=attributes[0],
+    use_raw=False,
+    log=False,
+    show=False,
+)
+fig = ax.figure
+fig.savefig(output_dir / f"expression_diff.{cl}.violin.svg", **figkws)
+
+#
+
+#
+
+#
+
+#
+
+
+# Investigate co-expression pattern within tumor cells
+a = (
+    ann[ann.obs.query("`metacluster_1.5_labels` == 'Tumor cells'").index, :]
+    .to_df()
+    .join(ann.obs[["sample"]])
 )
 
-p1 = perc.groupby(perc.index.str.extract("(.*)-")[0].values).mean()
-tp = p1.join(clinical[sig]).dropna()
-fig, axes = plt.subplots(3, 3, figsize=(7, 7))
-axes = axes.flatten()
-for i, col in enumerate(p1.columns):
-    axes[i].scatter(tp[sig], tp[col])
-    axes[i].set_title(col)
+mrks = ["GATA3(Eu153)", "KRT5(Dy163)"]
+b = a[mrks]
+bs = (b - b.min()) / (b.max() - b.min())
+r = bs[mrks[1]] / bs[mrks].sum(1)
+
+
+fig, ax = plt.subplots(1, 1, figsize=(6, 3))
+sns.distplot(r, ax=ax)
+ax.set(xlabel="Ratio of Keratin5 to GATA3 expression")
 fig.savefig(
-    results_dir / "ssGSEA_score.correlation_with_cell_types.percentage.svg"
+    output_dir / "tumor_cells_expression.KRT5_GATA3.ratio.distplot.svg",
+    **figkws,
+)
+
+samples = sorted(ann.obs["sample"].unique(), key=lambda x: x.split("_")[1])
+n, m = get_grid_dims(len(samples))
+fig, axes = plt.subplots(n, m, figsize=(m * 3, n * 3), sharex=True, sharey=True)
+ratios = dict()
+for i, sample in enumerate(samples):
+    ax = axes.flatten()[i]
+    for y in [0.25, 0.5, 0.75]:
+        ax.axhline(y, linestyle="--", color="grey", linewidth=0.25)
+    f = a["sample"] == sample
+    ax.scatter(bs.loc[f].mean(1), r.loc[f], alpha=0.1, s=2, rasterized=True)
+    ax.set(title=sample)
+    ratios[sample] = r.loc[f]
+    for t in [0.25, 0.5, 0.75, 1.0]:
+        fr = ((r.loc[f] <= t) & (r.loc[f] >= t - 0.25)).sum() / f.sum()
+        ax.text(0.45, t - 0.125, s=f"{fr * 100:03.2f}%")
+for ax in axes.flatten()[i + 1 :]:
+    ax.axis("off")
+for ax in axes[:, 0]:
+    ax.set(ylabel="Ratio Keratin5 to GATA3")
+for ax in axes[-1, :]:
+    ax.set(xlabel="Mean Keratin5/GATA3 expression")
+fig.savefig(
+    output_dir
+    / "tumor_cells_expression.KRT5_GATA3.distribution_mean_vs_ratio.scatter.svg",
+    **figkws,
+)
+
+perc = (
+    pd.Series(
+        {s: ((r > 0.25) & (r < 0.75)).sum() / r.size for s, r in ratios.items()}
+    ).sort_values(ascending=False)
+    * 100
+)
+
+fig, ax = plt.subplots(1, 1, figsize=(6, 3))
+sns.barplot(
+    x=perc, y=perc.index, orient="horizontal", palette="copper_r", ax=ax
+)
+ax.set(
+    xlim=(0, 100), xlabel="% tumor cells double expressing\nKeratin5 and GATA3"
+)
+fig.savefig(
+    output_dir / "tumor_cells_expression.KRT5_GATA3.summary.barplot.svg",
+    **figkws,
 )
 
 
-#
+# Alternative:
+tumor_markers = [
+    "GATA3(Eu153)",
+    "KRT5(Dy163)",
+    "ECadherin(Gd158)",
+    "Vimentin(Nd143)",
+    "PanKeratinC11(Nd148)",
+]
 
-#
+# # Do it aggregated per sample
+sa = ann[ann.obs.query("`metacluster_1.5_labels` == 'Tumor cells'").index, :][
+    :, tumor_markers
+].copy()
+sa = AnnData(sa.to_df().groupby(sa.obs["sample"]).mean())
+sc.pp.pca(sa)
+sc.pp.neighbors(sa)
+# sc.tl.umap(sa)
 
-#
+fig = sc.pl.pca(sa, color=tumor_markers, s=200, show=False)[0].figure
+fig.savefig(
+    output_dir / "Basal_Luminal_axis.all_tumor_markers.pca.svg",
+    **figkws,
+)
 
-#
+pc_position = pd.Series(
+    sa.obsm["X_pca"][:, 0], index=sa.obs.index
+).sort_values()
 
-#
+fig, ax = plt.subplots(1, 1, figsize=(4, 4))
+ax.scatter(pc_position.index, pc_position)
+ax.axhline(0, linestyle="--", color="grey")
+ax.set_xticklabels(pc_position.index, rotation=90)
+ax.set(xlabel="Sample", ylabel="Ba/Sq vs Lum")
+fig.savefig(
+    output_dir / "Basal_Luminal_axis.all_tumor_markers.rankplot.svg",
+    **figkws,
+)
 
-#
+# # # Using only two markers
+tumor_markers = ["GATA3(Eu153)", "KRT5(Dy163)"]
 
-#
+sa = ann[ann.obs.query("`metacluster_1.5_labels` == 'Tumor cells'").index, :][
+    :, tumor_markers
+].copy()
+sa = sa.to_df().groupby(sa.obs["sample"]).mean()
+sas = ((sa - sa.min()) / (sa.max() - sa.min())) + 0.1
+pc_position = np.log(
+    sas[tumor_markers[1]] / sas[tumor_markers[0]]
+).sort_values()
+sa = sa.reindex(pc_position.index)
+
+fig, ax = plt.subplots(1, 1, figsize=(4, 4))
+ax.scatter(
+    sa[tumor_markers[1]], sa[tumor_markers[0]], c=pc_position, cmap="coolwarm"
+)
+for i in sa.index:
+    ax.text(
+        sa.loc[i, tumor_markers[1]], sa.loc[i, tumor_markers[0]], s=i, ha="left"
+    )
+ax.set(xlabel="KRT5", ylabel="GATA3")
+fig.savefig(
+    output_dir / "Basal_Luminal_axis.only_GATA_KRT5.scatterplot.svg",
+    **figkws,
+)
+fig, ax = plt.subplots(1, 1, figsize=(4, 4))
+ax.scatter(pc_position.index, pc_position)
+ax.axhline(0, linestyle="--", color="grey")
+ax.set_xticklabels(pc_position.index, rotation=90)
+ax.set(xlabel="Sample", ylabel="Ba/Sq vs Lum")
+fig.savefig(
+    output_dir / "Basal_Luminal_axis.only_GATA_KRT5.rankplot.svg",
+    **figkws,
+)
+
+# # try using single cell data
+a = ann[ann.obs.query("`metacluster_1.5_labels` == 'Tumor cells'").index, :][
+    :, tumor_markers
+].copy()
+
+a.X = a.raw[:, tumor_markers].X
+sc.pp.log1p(a)
+sc.pp.scale(a)
+sc.pp.pca(a)
+p = a.obs[["sample"]].assign(pca=-a.obsm["X_pca"][:, 0])
+order = p.groupby("sample")["pca"].median().sort_values()
+
+fig, ax = plt.subplots(1, 1, figsize=(4, 4))
+sns.violinplot(
+    data=p,
+    y="sample",
+    x="pca",
+    orient="horiz",
+    order=order.index,
+    palette="coolwarm",
+    ax=ax,
+)
+ax.set(xlabel="Ba/Sq vs Lum")
+fig.savefig(
+    output_dir / "Basal_Luminal_axis.only_GATA_KRT5.single_cell.violinplot.svg",
+    **figkws,
+)
+fig, ax = plt.subplots(1, 1, figsize=(4, 4))
+ax.axvline(0, linestyle="--", color="gray")
+sns.boxplot(
+    data=p,
+    y="sample",
+    x="pca",
+    orient="horiz",
+    order=order.index,
+    palette="coolwarm",
+    ax=ax,
+    fliersize=0,
+)
+ax.set(xlabel="Ba/Sq vs Lum", xlim=(-5, 5))
+fig.savefig(
+    output_dir / "Basal_Luminal_axis.only_GATA_KRT5.single_cell.boxplot.svg",
+    **figkws,
+)
+
 
 # # Recluster non-tumor cells
 # ann = sc.read_h5ad(h5ad_file)
