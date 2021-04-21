@@ -3,7 +3,7 @@
 NAME=$(shell basename `pwd`)
 SAMPLES=$(shell ls data)
 PANEL=metadata/panel_markers.UTUC.csv
-MODEL=model/$(NAME)/$(NAME).ilp
+MODEL=_models/$(NAME)/$(NAME).ilp
 
 help:  ## Display help and quit
 	@echo Makefile for the $(NAME) project/package.
@@ -24,7 +24,7 @@ prepare:  ##  Run first step of convertion of MCD to various files
 	@echo "Running prepare step for samples: $(SAMPLES)"
 	mkdir -p processed
 	for SAMPLE in $(SAMPLES); do \
-	python src/prepare_mcd.py \
+	python -u src/_prepare_mcd.py \
 			--n-crops 1 \
 			data/$${SAMPLE}/$${SAMPLE}.mcd \
 			$(PANEL) \
@@ -34,7 +34,7 @@ prepare:  ##  Run first step of convertion of MCD to various files
 process_local:  ## Run IMC pipeline locally
 	@echo $(SAMPLES)
 	for SAMPLE in $(SAMPLES); do \
-		python -m imcpipeline.pipeline \
+		python -u -m imcpipeline.pipeline \
 		--ilastik-model $(MODEL) \
 		--csv-pannel $(PANEL) \
 		--container docker \
@@ -45,8 +45,8 @@ process_local:  ## Run IMC pipeline locally
 
 process_scu:  ## Run IMC pipeline on SCU
 	for SAMPLE in $(SAMPLES); do
-		# python ~/projects/imcpipeline/imcpipeline/pipeline.py \
-		python -m imcpipeline.pipeline \
+		# python -u ~/projects/imcpipeline/imcpipeline/pipeline.py \
+		python -u -m imcpipeline.pipeline \
 		--ilastik-model $(MODEL) \
 		--csv-pannel $(PANEL) \
 		--cellprofiler-exec \
@@ -119,11 +119,20 @@ rename_outputs_back:  ## Rename outputs from values expected by `imc` to CellPro
 merge_runs:  ## Merge images from the same acquisition that were in multiple MCD files
 	python -u src/_merge_runs.py
 
+analysis:
+	python -u src/illustration.py
 
-sync:  ## Sync code to SCU server
+backup_time:
+	echo "Last backup: " `date` >> _backup_time
+	chmod 700 _backup_time
+
+_sync:
 	rsync --copy-links --progress -r \
 	. afr4001@pascal.med.cornell.edu:projects/$(NAME)
 
+sync: _sync backup_time ## [dev] Sync data/code to SCU server (should be done only when processing files from MCD files)
+
 
 .PHONY : move_models_out move_models_in clean_build clean_dist clean_eggs \
-clean _install install clean_docs docs run run_locally checkfailure fail checksuccess succ sync
+clean _install install clean_docs docs run run_locally \
+checkfailure fail checksuccess succ backup_time _sync sync
