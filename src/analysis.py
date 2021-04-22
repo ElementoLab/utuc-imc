@@ -1039,6 +1039,157 @@ def regression() -> None:
     res.to_csv(output_dir / "attribute_regression.subcellular_localization.csv")
 
 
+def correlate_with_RNA_score() -> None:
+    """
+    Plot fraction of cells per ROI/Sample and grouped by disease/phenotype.
+    """
+    output_dir = results_dir / "abundance"
+    output_dir.mkdir()
+
+    (
+        roi_counts,
+        roi_areas,
+        sample_counts,
+        sample_areas,
+    ) = generate_count_matrices()
+
+    # Plot score vs CD8
+    clinical = pd.read_csv(metadata_dir / "samples.csv", index_col=0)
+
+    sigs = [
+        ("ES", "Tcell Inflamation Signature ssGSEA ES"),
+        ("ZS", "Tcell Inflamation Signature (z-score)"),
+    ]
+
+    for lab, sig in sigs:
+        perc = (sample_counts.T / sample_counts.sum(1)).T * 100
+        mm2 = (sample_counts.T / sample_areas).T * 1e6
+        for df, ttype in [(perc, "percentage"), (mm2, "absolute")]:
+            g = df.columns.str.extract(r"\d+ - (.*) \(.*")[0].values
+            meta = (
+                df.T.groupby(g)
+                .agg(np.mean if ttype == "absolute" else np.sum)
+                .T
+            )
+            for df2, label in [(df, "cluster"), (meta, "cell_type")]:
+                tp = df2.join(clinical[sig]).dropna()
+                fig = get_grid_dims(df2.columns, return_fig=True, sharex=True)
+                for i, (ax, col) in enumerate(zip(fig.axes, df2.columns)):
+                    statsres = pg.corr(tp[sig], tp[col]).squeeze()
+                    ax.scatter(tp[sig], tp[col])
+                    sns.regplot(x=tp[sig], y=tp[col], ax=ax)
+                    xd = tp[sig].min()
+                    xu = tp[sig].max()
+                    ax.set(
+                        title=f"{col}\nr={statsres['r']:.3f}; p={statsres['p-val']:.3f}",
+                        xlim=(xd + (xd * 0.1), xu + (xu * 0.1)),
+                        ylabel=None,
+                    )
+                for ax in fig.axes[i + 1 :]:
+                    ax.axis("off")
+                fig.savefig(
+                    output_dir
+                    / f"ssGSEA_score.{lab}.correlation_with_{label}.{ttype}.svg"
+                )
+
+
+def tumor_cell_heterogeneity(a: anndata.AnnData) -> None:
+    # Investigate co-expression pattern within tumor cells
+
+    output_dir = results_dir / "tumor_heterogeneity"
+    output_dir.mkdir()
+
+    # # I will construct a latent space using only two markers
+    # # in cancer cells only
+    tumor_markers = ["GATA3(Eu153)", "KRT5(Dy163)"]
+
+    sa = a[
+        a.obs["cell_type_broad"].str.contains("Tumor cells"), tumor_markers
+    ].copy()
+    sa = sa.to_df().groupby(sa.obs["sample"]).mean()
+    sas = ((sa - sa.min()) / (sa.max() - sa.min())) + 0.1
+    pc_position = np.log(
+        sas[tumor_markers[1]] / sas[tumor_markers[0]]
+    ).sort_values()
+    sa = sa.reindex(pc_position.index)
+
+    fig, ax = plt.subplots(1, 1, figsize=(4, 4))
+    ax.scatter(
+        sa[tumor_markers[1]],
+        sa[tumor_markers[0]],
+        c=pc_position,
+        cmap="coolwarm",
+    )
+    for i in sa.index:
+        ax.text(
+            sa.loc[i, tumor_markers[1]],
+            sa.loc[i, tumor_markers[0]],
+            s=i,
+            ha="left",
+        )
+    ax.set(xlabel="KRT5", ylabel="GATA3")
+    fig.savefig(
+        output_dir / "Basal_Luminal_axis.only_GATA_KRT5.scatterplot.svg",
+        **figkws,
+    )
+    fig, ax = plt.subplots(1, 1, figsize=(4, 4))
+    ax.scatter(pc_position.index, pc_position)
+    ax.axhline(0, linestyle="--", color="grey")
+    ax.set_xticklabels(pc_position.index, rotation=90)
+    ax.set(xlabel="Sample", ylabel="Ba/Sq vs Lum")
+    fig.savefig(
+        output_dir / "Basal_Luminal_axis.only_GATA_KRT5.rankplot.svg",
+        **figkws,
+    )
+
+    # # illustrate variability in single cells
+    sa = a[
+        a.obs["cell_type_broad"].str.contains("Tumor cells"), tumor_markers
+    ].copy()
+    sa.X = sa.raw[:, tumor_markers].X
+    sc.pp.log1p(sa)
+    sc.pp.scale(sa)
+    sc.pp.pca(sa)
+    p = sa.obs[["sample"]].assign(pca=-sa.obsm["X_pca"][:, 0])
+    order = p.groupby("sample")["pca"].median().sort_values()
+
+    fig, ax = plt.subplots(1, 1, figsize=(4, 4))
+    ax.axvline(0, linestyle="--", color="gray")
+    sns.violinplot(
+        data=p,
+        y="sample",
+        x="pca",
+        orient="horiz",
+        order=order.index,
+        palette="coolwarm",
+        ax=ax,
+    )
+    ax.set(xlabel="Ba/Sq vs Lum")
+    fig.savefig(
+        output_dir
+        / "Basal_Luminal_axis.only_GATA_KRT5.single_cell.violinplot.svg",
+        **figkws,
+    )
+    fig, ax = plt.subplots(1, 1, figsize=(4, 4))
+    ax.axvline(0, linestyle="--", color="gray")
+    sns.boxplot(
+        data=p,
+        y="sample",
+        x="pca",
+        orient="horiz",
+        order=order.index,
+        palette="coolwarm",
+        ax=ax,
+        fliersize=0,
+    )
+    ax.set(xlabel="Ba/Sq vs Lum")
+    fig.savefig(
+        output_dir
+        / "Basal_Luminal_axis.only_GATA_KRT5.single_cell.boxplot.svg",
+        **figkws,
+    )
+
+
 if __name__ == "__main__":
     try:
         sys.exit(main())
