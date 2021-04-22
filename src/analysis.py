@@ -51,9 +51,7 @@ def main(cli=None) -> int:
         results_dir / "phenotyping" / prj.name
         + ".filter_solidity.log1p.combat.bbknn.h5ad"
     )
-    h5ad_rf = h5ad_f.replace_(".h5ad", ".cd4_tcell_clustered" + ".h5ad")
     a = sc.read(h5ad_f)
-    a2 = sc.read(h5ad_rf)
 
     # Add a cell_type label
     if "cell_type" not in a.obs.columns:
@@ -63,6 +61,8 @@ def main(cli=None) -> int:
         a.obs["cell_type"] = a.obs["cluster_1.0"].replace(cluster_labels)
 
         # # label Tregs (cluster 3 of more refined CD4 clustering)
+        h5ad_rf = h5ad_f.replace_(".h5ad", ".cd4_tcell_clustered" + ".h5ad")
+        a2 = sc.read(h5ad_rf)
         cells = a2.obs.index[a2.obs["rcluster_0.5"] == 3]
         l = "15 - T-Regs (CD3, CD4, CD45, CD45RO, FoxP3)"
         a.obs.loc[cells, "cell_type"] = l
@@ -75,38 +75,66 @@ def main(cli=None) -> int:
         # plt.axhline(15, color='grey', linestyle='--')
         # plt.axvline(6.85, color='grey', linestyle='--')
         u = a.obsm["X_umap"]
-        l = "02 - ?"
+        l = "16 - ? ()"
         a.obs.loc[t & ((u[:, 0] < 6.85) | (u[:, 1] < 15)), "cell_type"] = l
+
+        a.obs["cell_type_broad"] = (
+            a.obs["cell_type"]
+            .str.extract(r"\d+ - (.*) \(.*")[0]
+            .replace("?", "Unkown")
+        )
+        o = a.obs["cell_type_broad"].value_counts().index
+        o = {c: f"{str(i).zfill(2)} - {c}" for i, c in enumerate(o, 1)}
+        a.obs["cell_type_broad"] = a.obs["cell_type_broad"].replace(o)
 
         # save h5ad
         sc.write(h5ad_f, a)
 
     # # replot with cell type labels
+    p = results_dir / "phenotyping" / prj.name
     fig = sc.pl.umap(a, color="cell_type", show=False).figure
     rasterize_scanpy(fig)
     a.obs["cell_type_i"] = pd.Categorical(
         a.obs["cell_type"].str.extract(r"(\d+) - .*")[0]
     )
     add_centroids(a, column="cell_type_i", ax=fig.axes[0], algo="umap")
-    fig.savefig(
-        results_dir / "phenotyping" / prj.name + ".umap.cell_type.svg", **figkws
-    )
+    fig.savefig(p + ".umap.cell_type.svg", **figkws)
 
     # # replot heatmap
     chs = state_channels + ["DNA", "area", "eccentricity"]
     x = a.to_df().join(a.obs[chs]).groupby(a.obs["cell_type"]).mean()
     cells = a.obs["cell_type"].value_counts().rename("Cell count")
-    fig = clustermap(x, config="z", row_colors=cells, figsize=(9, 5)).fig
-    fig.savefig(
-        results_dir / "phenotyping" / prj.name + ".heatmap.cell_type.svg",
-        **figkws,
+    kws = dict(row_colors=cells, figsize=(9, 5))
+    fig = clustermap(x[a.var.index], config="abs", **kws).fig
+    fig.savefig(p + ".heatmap.cell_type.abs.svg", **figkws)
+    fig = clustermap(x, config="z", **kws).fig
+    fig.savefig(p + ".heatmap.cell_type.z.svg", **figkws)
+
+    # # illustrate cell types spatially
+    chs = [
+        "ColtypeI(Tm169)",
+        "KRT5(Dy163)",
+        "PanKeratinC11(Nd148)",
+        "GATA3(Eu153)",
+        "CD3(Er170)",
+        "CD4(Gd156)",
+        "FoxP3(Gd155)",
+        "CD8a(Dy162)",
+        "CD68(Tb159)",
+        "CD20(Dy161)",
+    ]
+    illustrate_phenotypes(
+        a, channels=chs, labels=["cell_type", "cell_type_broad"]
     )
 
     # Make cluster and cell type counts per sample and ROI
-    generate_count_matrices(a, var="cell_type", overwrite=True)
+    _ = generate_count_matrices(a, var="cell_type", overwrite=True)
 
     # See distribution of abundance between samples with different attributes
     differential_abundance()
+
+    # Regression
+    regression()
 
     return 0
 
@@ -522,6 +550,117 @@ def phenotyping_t_cells(args, suffix=".cd4_tcell_clustered") -> None:
         plt.close("all")
 
 
+def illustrate_phenotypes(
+    a: anndata.AnnData,
+    channels: List[str],
+    labels: List[str],
+    overwrite: bool = False,
+    suffix: str = "",
+    remove_files: bool = False,
+) -> None:
+    import os
+    import parmap
+
+    # Plot one just to get it started
+    roi = prj.rois[0]
+    _plot_roi(
+        roi,
+        channels=channels[:3],
+        clusters=labels,
+        overwrite=overwrite,
+        output_suffix=suffix,
+        remove_cluster_str="Unkown",
+        file_type="png",
+    )
+    # Now plot all
+    parmap.map(
+        _plot_roi,
+        prj.rois,
+        pm_pbar=True,
+        channels=channels,
+        clusters=labels,
+        overwrite=overwrite,
+        output_suffix=suffix,
+        remove_cluster_str="Unkown",
+        file_type="pdf",
+    )
+
+    out_dir = results_dir / "illustration"
+    out_dir.mkdir()
+    files = sorted(out_dir.glob(f"*.illustration{suffix}.pdf"))
+    out_file = out_dir / "phenotype_illustrations.pdf"
+    cmd = f"pdftk {' '.join(map(str, files))} cat output {out_file}"
+    os.system(cmd)
+
+    if remove_files:
+        for file in files:
+            file.unlink(missing_ok=True)
+
+
+def _plot_roi(
+    roi,
+    channels=None,
+    clusters=None,
+    overwrite: bool = False,
+    output_suffix="",
+    position=None,
+    file_type="png",
+    return_fig=False,
+    remove_cluster_str: str = None,
+) -> None:
+    if channels is None:
+        channels = a.var.index
+    (results_dir / "illustration").mkdir()
+    out_f = (
+        results_dir / "illustration" / roi.name
+        + f".illustration{output_suffix}.{file_type}"
+    )
+    if out_f.exists() and not overwrite:
+        return
+
+    ar = roi.shape[1] / roi.shape[2]
+    n, m = 2, max(len(channels), len(clusters))
+    fig, axes = plt.subplots(
+        n,
+        m,
+        figsize=(m * 4, n * 4 * ar),
+        gridspec_kw=dict(wspace=0),
+        sharex=True,
+        sharey=True,
+        squeeze=False,
+    )
+
+    roi.plot_channels(channels, axes=axes[0])
+    for i, (ax, cluster) in enumerate(zip(axes[1, ::2], clusters)):
+        c = (
+            a.obs.set_index(["sample", "roi", "obj_id"])[cluster]
+            .rename("cluster")
+            .astype(str)
+        )
+        if remove_cluster_str is not None:
+            c = c[~c.str.contains(remove_cluster_str)]
+        if all(
+            [
+                isinstance(x, (int, float, np.int64, np.float64))
+                for x in a.obs[cluster]
+            ]
+        ):
+            c = c + " - " + c
+        roi.plot_cell_types(c.loc[roi.sample.name, roi.name, :], ax=ax)
+        ax.set(title=cluster)
+    for ax in axes.flat:
+        ax.axis("off")
+
+    fig.savefig(
+        out_f,
+        dpi=300,
+        bbox_inches="tight",
+    )
+    if return_fig:
+        return fig
+    plt.close(fig)
+
+
 def get_scanpy_func(algo: str) -> Callable:
     if algo != "pymde":
         return getattr(sc.pl, algo)
@@ -711,6 +850,81 @@ def differential_abundance() -> None:
 
     # Save for supplement
     stats.to_excel("manuscript/Supplementary Table 3.xlsx", index=False)
+
+
+def regression() -> None:
+    """
+    Plot fraction of cells per ROI/Sample and grouped by disease/phenotype.
+    """
+    import matplotlib
+    import statsmodels.api as sm
+    import statsmodels.formula.api as smf
+
+    output_dir = results_dir / "abundance"
+    output_dir.mkdir()
+
+    (
+        roi_counts,
+        roi_areas,
+        sample_counts,
+        sample_areas,
+    ) = generate_count_matrices()
+
+    agg_sample_counts = (
+        sample_counts.T.groupby(
+            sample_counts.columns.str.extract(r"\d+ - (.*) \(.*")[0].values
+        )
+        .mean()
+        .T
+    )
+    y = (agg_sample_counts.T / agg_sample_counts.sum(1)).T * 100
+    x = sample_attributes.reindex(y.index)
+
+    # clean up names
+    y.columns = (
+        y.columns.str.replace(" ", "_")
+        .str.replace("/", "_")
+        .str.replace("-", "_")
+    )
+    x.columns = (
+        x.columns.str.replace(" ", "_")
+        .str.replace("/", "_")
+        .str.replace("-", "_")
+    )
+
+    # preparations
+    d = x.join(y + 1).dropna()
+
+    _res = list()
+    for var in y.columns:
+        r = smf.glm(
+            f"{var} ~ {' + '.join(x.columns)}",
+            data=d,
+            family=sm.families.Gamma(sm.families.links.log()),
+        ).fit()
+        _res.append(r.summary2().tables[1].assign(cell_type=var))
+    res = pd.concat(_res).drop("Intercept").rename_axis(index="variable")
+    res.to_csv(output_dir / "attribute_regression.csv")
+
+    c = res.pivot_table(index="cell_type", columns="variable", values="Coef.")
+    p = res.pivot_table(index="cell_type", columns="variable", values="P>|z|")
+    p = (p < 0.05).astype(int)
+    grid = clustermap(
+        c,
+        center=0,
+        cmap="RdBu_r",
+        cbar_kws=dict(label=r"Coefficient ($\beta$)"),
+        figsize=(3, 5),
+        annot=p,
+    )
+    for child in grid.ax_heatmap.get_children():
+        if isinstance(child, matplotlib.text.Text):
+            if child.get_text() == "0":
+                child.set_visible(False)
+                child.remove()
+            elif child.get_text() == "1":
+                child.set_text("*")
+    grid.savefig(output_dir / "attribute_regression.svg", **figkws)
 
 
 if __name__ == "__main__":
