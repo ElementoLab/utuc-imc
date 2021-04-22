@@ -153,6 +153,94 @@ def get_parser() -> ArgumentParser:
     return parser
 
 
+def quantify_subcellular_localization() -> DataFrame:
+    import parmap
+    from skimage.morphology import binary_dilation, binary_erosion, disk
+
+    def quantify(roi) -> DataFrame:
+        nucl_mask = roi.nuclei_mask.astype(int)
+        cell_mask = roi.cell_mask.astype(int)
+        cyto_mask = binary_erosion(cell_mask, disk(2))
+        cyto_mask[nucl_mask != 0] = 0
+        membr_mask = cell_mask.copy()
+        o = (nucl_mask > 0) | (cyto_mask > 0)
+        membr_mask[o] = 0
+        stack = roi.stack
+        n = stack[:, nucl_mask > 0].mean(1)
+        c = stack[:, cyto_mask.astype(int) > 0].mean(1)
+        m = stack[:, membr_mask > 0].mean(1)
+        e = stack[:, cell_mask == 0].mean(1)
+        return pd.DataFrame(
+            [n, c, m, e],
+            index=["nuclear", "cytoplasmatic", "membranar", "extracellular"],
+            columns=roi.channel_labels,
+        ).T
+        # # to visualize:
+        # p = np.zeros(roi.shape[1:], dtype=int)
+        # p[nucl_mask > 0] = 1
+        # p[cyto_mask.astype(int) > 0] = 2
+        # p[membr_mask > 0] = 3
+        # p[cell_mask == 0] = 4
+        # fig, ax = plt.subplots()
+        # ax.imshow(p, cmap='tab10')
+
+    _quants = parmap.map(quantify, prj.rois, pm_pbar=True)
+    quant = pd.concat(
+        [q.assign(roi=roi.name) for q, roi in zip(_quants, prj.rois)]
+    )
+    quant["nuclear_cytolasmatic_ratio"] = np.log2(
+        quant["nuclear"] / quant["cytoplasmatic"]
+    )
+    quant["cytoplasmatic_membranar_ratio"] = np.log2(
+        quant["cytoplasmatic"] / quant["membranar"]
+    )
+    quant["cellular_extracellular_ratio"] = np.log2(
+        quant[["nuclear", "cytoplasmatic", "membranar"]].mean(1)
+        / quant["extracellular"]
+    )
+    quant.to_csv(results_dir / "subcellular_quantification.whole_image.csv")
+
+    p = quant.groupby(level=0).mean()
+    p = p.loc[~p.index.str.contains("EMPTY")]
+    s = quant.groupby(level=0).std()
+    s = s.loc[~s.index.str.contains("EMPTY")]
+
+    conds = [
+        (
+            "cytoplasmatic_membranar_ratio",
+            "nuclear_cytolasmatic_ratio",
+            "cellular_extracellular_ratio",
+        ),
+        (
+            "cellular_extracellular_ratio",
+            "nuclear_cytolasmatic_ratio",
+            "cytoplasmatic_membranar_ratio",
+        ),
+    ]
+    fig, axes = plt.subplots(1, len(conds), figsize=(10 * len(conds), 10))
+    for ax, (x, y, z) in zip(axes, conds):
+        ax.errorbar(
+            x=p[x],
+            y=p[y],
+            yerr=s[y],
+            xerr=s[x],
+            linestyle="None",
+            marker="^",
+            ecolor="grey",
+            alpha=0.25,
+        )
+        ax.scatter(data=p, x=x, y=y, c=z, alpha=0.5)
+        ax.set(xlabel=x, ylabel=y)
+        for m in p.index:
+            ax.text(p.loc[m, x], p.loc[m, y], ha="center", va="center", s=m)
+    for ax in axes:
+        ax.axhline(0, color="grey", linestyle="--")
+        ax.axvline(0, color="grey", linestyle="--")
+    fig.savefig(
+        results_dir / "subcellular_quantification.whole_image.svg", **figkws
+    )
+
+
 def phenotyping(
     args,
     suffix="",
@@ -925,6 +1013,30 @@ def regression() -> None:
             elif child.get_text() == "1":
                 child.set_text("*")
     grid.savefig(output_dir / "attribute_regression.svg", **figkws)
+
+    # See if there's any change in subcellular localization ratios
+    quant = pd.read_csv(
+        results_dir / "subcellular_quantification.whole_image.csv", index_col=0
+    ).drop(exclude_channels)
+    quant.loc[:, "sample"] = quant["roi"].str.extract(r"(.*)-\d+")[0]
+    y = quant.reset_index().groupby(["sample", "channel"]).mean()
+
+    # preparations
+    d = x.join(y).dropna()
+
+    _res = list()
+    for var in y.columns[y.columns.str.contains("_ratio")]:
+        for channel in y.index.levels[1]:
+            r = smf.glm(
+                f"{var} ~ {' + '.join(x.columns)}",
+                data=d.loc[:, channel, :],
+                family=sm.families.Gaussian(),
+            ).fit()
+            _res.append(
+                r.summary2().tables[1].assign(variable=var, channel=channel)
+            )
+    res = pd.concat(_res).drop("Intercept").rename_axis(index="variable")
+    res.to_csv(output_dir / "attribute_regression.subcellular_localization.csv")
 
 
 if __name__ == "__main__":
