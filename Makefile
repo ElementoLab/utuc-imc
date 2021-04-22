@@ -121,6 +121,7 @@ merge_runs:  ## Merge images from the same acquisition that were in multiple MCD
 
 analysis:
 	python -u src/illustration.py
+	python -u src/analysis.py
 
 backup_time:
 	echo "Last backup: " `date` >> _backup_time

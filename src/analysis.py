@@ -1,7 +1,8 @@
 #!/usr/bin/env python
 
 """
-Classification of cells into cell types/states.
+Analysis of imaging mass cytometry data for a cohort of
+upper tract urothelial cancer patients
 """
 
 
@@ -22,16 +23,6 @@ from imc.types import DataFrame
 from seaborn_extensions import swarmboxenplot, clustermap
 
 from src.config import *
-
-# from src.operations import (
-#     plot_umap,
-#     plot_umap_with_labeled_clusters,
-#     plot_cluster_heatmaps,
-#     plot_cluster_illustrations,
-#     plot_cluster_heatmaps_with_labeled_clusters,
-# )
-# from src.utils import z_score_by_column
-
 
 cli = None
 
@@ -135,6 +126,12 @@ def main(cli=None) -> int:
 
     # Regression
     regression()
+
+    # See whether ssGSEA score is related with IMC cell type abundance
+    correlate_with_RNA_score()
+
+    # Investigate heterogeneity in tumor cells between and within patients
+    tumor_cell_heterogeneity(a)
 
     return 0
 
@@ -1057,7 +1054,7 @@ def correlate_with_RNA_score() -> None:
     clinical = pd.read_csv(metadata_dir / "samples.csv", index_col=0)
 
     sigs = [
-        ("ES", "Tcell Inflamation Signature ssGSEA ES"),
+        # ("ES", "Tcell Inflamation Signature ssGSEA ES"),
         ("ZS", "Tcell Inflamation Signature (z-score)"),
     ]
 
