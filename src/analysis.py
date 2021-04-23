@@ -28,13 +28,12 @@ cli = None
 
 
 def main(cli=None) -> int:
-    parser = get_parser()
-    args = parser.parse_args(cli)
+    args = get_parser().parse_args(cli)
 
     # Phenotype all cells
     phenotyping(args, remove_batch_method="combat.bbknn")
 
-    # increased resolution of CD4 T-cells
+    # increased resolution of CD4 T-cells (T-regs found)
     phenotyping_t_cells(args, suffix=".cd4_tcell_clustered")
 
     # Set cell type names
@@ -58,7 +57,7 @@ def main(cli=None) -> int:
         l = "15 - T-Regs (CD3, CD4, CD45, CD45RO, FoxP3)"
         a.obs.loc[cells, "cell_type"] = l
 
-        # #
+        # # Refine CD8 clustering
         t = a.obs["cell_type"].str.contains("CD8 T cells")
         t_expr = a[t, "CD8a(Dy162)"].X.squeeze()
         a2 = a[t, :]
@@ -83,13 +82,15 @@ def main(cli=None) -> int:
 
     # # replot with cell type labels
     p = results_dir / "phenotyping" / prj.name
-    fig = sc.pl.umap(a, color="cell_type", show=False).figure
+    axes = sc.pl.umap(a, color=["cell_type", "cell_type_broad"], show=False)
+    fig = axes[0].figure
     rasterize_scanpy(fig)
     a.obs["cell_type_i"] = pd.Categorical(
         a.obs["cell_type"].str.extract(r"(\d+) - .*")[0]
     )
-    add_centroids(a, column="cell_type_i", ax=fig.axes[0], algo="umap")
-    fig.savefig(p + ".umap.cell_type.svg", **figkws)
+    add_centroids(a, column="cell_type_i", ax=axes[0], algo="umap")
+    add_centroids(a, column="cell_type_broad", ax=axes[1], algo="umap")
+    fig.savefig(p + ".umap.cell_type.svgz", **figkws)
 
     # # replot heatmap
     chs = state_channels + ["DNA", "area", "eccentricity"]
@@ -133,6 +134,9 @@ def main(cli=None) -> int:
     # Investigate heterogeneity in tumor cells between and within patients
     tumor_cell_heterogeneity(a)
 
+    # Illustrate tumor and immune phenotype differences between primary and metastasis
+    illustrate_change_with_metastasis()
+
     return 0
 
 
@@ -148,94 +152,6 @@ def get_parser() -> ArgumentParser:
         "--algos", default=["umap", "diffmap", "pymde", "draw_graph"], nargs="+"
     )
     return parser
-
-
-def quantify_subcellular_localization() -> DataFrame:
-    import parmap
-    from skimage.morphology import binary_dilation, binary_erosion, disk
-
-    def quantify(roi) -> DataFrame:
-        nucl_mask = roi.nuclei_mask.astype(int)
-        cell_mask = roi.cell_mask.astype(int)
-        cyto_mask = binary_erosion(cell_mask, disk(2))
-        cyto_mask[nucl_mask != 0] = 0
-        membr_mask = cell_mask.copy()
-        o = (nucl_mask > 0) | (cyto_mask > 0)
-        membr_mask[o] = 0
-        stack = roi.stack
-        n = stack[:, nucl_mask > 0].mean(1)
-        c = stack[:, cyto_mask.astype(int) > 0].mean(1)
-        m = stack[:, membr_mask > 0].mean(1)
-        e = stack[:, cell_mask == 0].mean(1)
-        return pd.DataFrame(
-            [n, c, m, e],
-            index=["nuclear", "cytoplasmatic", "membranar", "extracellular"],
-            columns=roi.channel_labels,
-        ).T
-        # # to visualize:
-        # p = np.zeros(roi.shape[1:], dtype=int)
-        # p[nucl_mask > 0] = 1
-        # p[cyto_mask.astype(int) > 0] = 2
-        # p[membr_mask > 0] = 3
-        # p[cell_mask == 0] = 4
-        # fig, ax = plt.subplots()
-        # ax.imshow(p, cmap='tab10')
-
-    _quants = parmap.map(quantify, prj.rois, pm_pbar=True)
-    quant = pd.concat(
-        [q.assign(roi=roi.name) for q, roi in zip(_quants, prj.rois)]
-    )
-    quant["nuclear_cytolasmatic_ratio"] = np.log2(
-        quant["nuclear"] / quant["cytoplasmatic"]
-    )
-    quant["cytoplasmatic_membranar_ratio"] = np.log2(
-        quant["cytoplasmatic"] / quant["membranar"]
-    )
-    quant["cellular_extracellular_ratio"] = np.log2(
-        quant[["nuclear", "cytoplasmatic", "membranar"]].mean(1)
-        / quant["extracellular"]
-    )
-    quant.to_csv(results_dir / "subcellular_quantification.whole_image.csv")
-
-    p = quant.groupby(level=0).mean()
-    p = p.loc[~p.index.str.contains("EMPTY")]
-    s = quant.groupby(level=0).std()
-    s = s.loc[~s.index.str.contains("EMPTY")]
-
-    conds = [
-        (
-            "cytoplasmatic_membranar_ratio",
-            "nuclear_cytolasmatic_ratio",
-            "cellular_extracellular_ratio",
-        ),
-        (
-            "cellular_extracellular_ratio",
-            "nuclear_cytolasmatic_ratio",
-            "cytoplasmatic_membranar_ratio",
-        ),
-    ]
-    fig, axes = plt.subplots(1, len(conds), figsize=(10 * len(conds), 10))
-    for ax, (x, y, z) in zip(axes, conds):
-        ax.errorbar(
-            x=p[x],
-            y=p[y],
-            yerr=s[y],
-            xerr=s[x],
-            linestyle="None",
-            marker="^",
-            ecolor="grey",
-            alpha=0.25,
-        )
-        ax.scatter(data=p, x=x, y=y, c=z, alpha=0.5)
-        ax.set(xlabel=x, ylabel=y)
-        for m in p.index:
-            ax.text(p.loc[m, x], p.loc[m, y], ha="center", va="center", s=m)
-    for ax in axes:
-        ax.axhline(0, color="grey", linestyle="--")
-        ax.axvline(0, color="grey", linestyle="--")
-    fig.savefig(
-        results_dir / "subcellular_quantification.whole_image.svg", **figkws
-    )
 
 
 def phenotyping(
@@ -422,7 +338,6 @@ def phenotyping(
     a = a[a.obs.sample(frac=1).index]
 
     # Plot projections
-    vmin = None
     vmax = (
         [None]
         + np.percentile(a.raw[:, a.var.index].X, 95, axis=0).tolist()
@@ -441,13 +356,12 @@ def phenotyping(
         + [f"cluster_{res}" for res in args.resolutions]
     )
     for algo in tqdm(args.algos):
-        f = output_dir / f"{prj.name}.{algo}{suffix}{proc_suffix}.pdf"
+        f = output_dir / f"{prj.name}.{algo}{suffix}{proc_suffix}.svgz"
         projf = get_scanpy_func(algo)
         axes = projf(
             a,
             color=color,
             show=False,
-            vmin=vmin,
             vmax=vmax,
             use_raw=True,
         )
@@ -456,6 +370,20 @@ def phenotyping(
             add_centroids(a, res=res, ax=ax, algo=algo)
         rasterize_scanpy(fig)
         fig.savefig(f, **figkws)
+
+        for i, c in enumerate(color):
+            f = output_dir / f"{prj.name}.{algo}{suffix}{proc_suffix}.{c}.svg"
+            projf = get_scanpy_func(algo)
+            axes = projf(
+                a,
+                color=c,
+                show=False,
+                vmax=vmax[i],
+                use_raw=True,
+            )
+            fig = axes.figure
+            rasterize_scanpy(fig)
+            fig.savefig(f, **figkws)
 
         # Plot ROIs separately
         f = (
@@ -908,15 +836,16 @@ def differential_abundance() -> None:
             ("cell_type", (df2.T / df2.sum(1)).T * 100, (df2.T / area).T * 1e6),
         ]:
             for p, measure in [(dfp, "percentage"), (dfarea, "mm2")]:
+                _s = list()
                 for var in attributes:
-                    fig, stats = swarmboxenplot(
+                    fig, s = swarmboxenplot(
                         data=p.join(attrs[[var]]),
                         x=var,
                         y=p.columns,
                         plot_kws=dict(palette=colors[var]),
                     )
-                    _stats.append(
-                        stats.assign(
+                    _s.append(
+                        s.assign(
                             grouping=grouping, dtype=dtype, measure=measure
                         )
                     )
@@ -927,6 +856,12 @@ def differential_abundance() -> None:
                         **figkws,
                     )
                     plt.close(fig)
+                # correct p-values per measurement type
+                stats = pd.concat(_s)
+                stats["p-cor"] = pg.multicomp(
+                    stats["p-unc"].values, method="fdr_bh"
+                )[1]
+                _stats.append(stats)
     stats = pd.concat(_stats)
     stats.to_csv(
         output_dir / f"{prj.name}.clustering.cell_type_abundance.stats.csv",
@@ -955,6 +890,12 @@ def regression() -> None:
         sample_areas,
     ) = generate_count_matrices()
 
+    # clean up names
+    sample_attributes.columns = (
+        sample_attributes.columns.str.replace(" ", "_")
+        .str.replace("/", "_")
+        .str.replace("-", "_")
+    )
     agg_sample_counts = (
         sample_counts.T.groupby(
             sample_counts.columns.str.extract(r"\d+ - (.*) \(.*")[0].values
@@ -962,63 +903,77 @@ def regression() -> None:
         .mean()
         .T
     )
-    y = (agg_sample_counts.T / agg_sample_counts.sum(1)).T * 100
-    x = sample_attributes.reindex(y.index)
-
-    # clean up names
-    y.columns = (
-        y.columns.str.replace(" ", "_")
-        .str.replace("/", "_")
-        .str.replace("-", "_")
-    )
-    x.columns = (
-        x.columns.str.replace(" ", "_")
-        .str.replace("/", "_")
-        .str.replace("-", "_")
-    )
-
     # preparations
-    d = x.join(y + 1).dropna()
+    agg_sample_counts.columns = (
+        agg_sample_counts.columns.str.replace(" ", "_")
+        .str.replace("/", "_")
+        .str.replace("-", "_")
+    )
+    ya = (agg_sample_counts.T / sample_areas).T * 1e6
+    # ya["immune"] = ya[ya.columns.drop(["Stroma", "Tumor_cells"])].sum(1)
+    yp = (agg_sample_counts.T / agg_sample_counts.sum(1)).T
+    # yp["immune"] = yp[yp.columns.drop(["Stroma", "Tumor_cells"])].sum(1)
+    x = sample_attributes.reindex(ya.index)
 
+    # absolute
+    d = x.join(ya + 1).dropna()  # the plus one is just to avoid warnings
     _res = list()
-    for var in y.columns:
+    for var in ya.columns:
         r = smf.glm(
             f"{var} ~ {' + '.join(x.columns)}",
             data=d,
             family=sm.families.Gamma(sm.families.links.log()),
         ).fit()
         _res.append(r.summary2().tables[1].assign(cell_type=var))
-    res = pd.concat(_res).drop("Intercept").rename_axis(index="variable")
-    res.to_csv(output_dir / "attribute_regression.csv")
+    res_a = pd.concat(_res).drop("Intercept").rename_axis(index="variable")
+    res_a.to_csv(output_dir / "attribute_regression.absolute.csv")
 
-    c = res.pivot_table(index="cell_type", columns="variable", values="Coef.")
-    p = res.pivot_table(index="cell_type", columns="variable", values="P>|z|")
-    p = (p < 0.05).astype(int)
-    grid = clustermap(
-        c,
-        center=0,
-        cmap="RdBu_r",
-        cbar_kws=dict(label=r"Coefficient ($\beta$)"),
-        figsize=(3, 5),
-        annot=p,
-    )
-    for child in grid.ax_heatmap.get_children():
-        if isinstance(child, matplotlib.text.Text):
-            if child.get_text() == "0":
-                child.set_visible(False)
-                child.remove()
-            elif child.get_text() == "1":
-                child.set_text("*")
-    grid.savefig(output_dir / "attribute_regression.svg", **figkws)
+    # proportion
+    d = x.join(yp).dropna()
+    _res = list()
+    for var in yp.columns:
+        r = smf.glm(
+            f"{var} ~ {' + '.join(x.columns)}",
+            data=d,
+            family=sm.families.Binomial(sm.families.links.logit()),
+        ).fit()
+        _res.append(r.summary2().tables[1].assign(cell_type=var))
+    res_p = pd.concat(_res).drop("Intercept").rename_axis(index="variable")
+    res_p.to_csv(output_dir / "attribute_regression.proportion.csv")
+
+    for df, dtype in [(res_a, "absolute"), (res_p, "proportion")]:
+        c = df.pivot_table(
+            index="cell_type", columns="variable", values="Coef."
+        )
+        p = df.pivot_table(
+            index="cell_type", columns="variable", values="P>|z|"
+        )
+        p = (p < 0.05).astype(int)
+        grid = clustermap(
+            c,
+            center=0,
+            cmap="RdBu_r",
+            cbar_kws=dict(label=r"Coefficient ($\beta$)"),
+            figsize=(3, 5),
+            annot=p,
+        )
+        for child in grid.ax_heatmap.get_children():
+            if isinstance(child, matplotlib.text.Text):
+                if child.get_text() == "0":
+                    child.set_visible(False)
+                    child.remove()
+                elif child.get_text() == "1":
+                    child.set_text("*")
+        grid.savefig(output_dir / f"attribute_regression.{dtype}.svg", **figkws)
 
     # See if there's any change in subcellular localization ratios
+    quantify_subcellular_localization()
     quant = pd.read_csv(
         results_dir / "subcellular_quantification.whole_image.csv", index_col=0
     ).drop(exclude_channels)
     quant.loc[:, "sample"] = quant["roi"].str.extract(r"(.*)-\d+")[0]
     y = quant.reset_index().groupby(["sample", "channel"]).mean()
-
-    # preparations
+    x.index.name = "sample"
     d = x.join(y).dropna()
 
     _res = list()
@@ -1030,10 +985,35 @@ def regression() -> None:
                 family=sm.families.Gaussian(),
             ).fit()
             _res.append(
-                r.summary2().tables[1].assign(variable=var, channel=channel)
+                r.summary2().tables[1].assign(localization=var, channel=channel)
             )
     res = pd.concat(_res).drop("Intercept").rename_axis(index="variable")
     res.to_csv(output_dir / "attribute_regression.subcellular_localization.csv")
+
+    # # plot
+    kws = dict(index="channel", columns=["localization", "variable"])
+    c = res.pivot_table(values="Coef.", **kws)
+    p = res.pivot_table(values="P>|z|", **kws)
+    p = (p < 0.05).astype(int)
+    grid = clustermap(
+        c,
+        center=0,
+        cmap="RdBu_r",
+        cbar_kws=dict(label=r"Coefficient ($\beta$)"),
+        figsize=(6, 12),
+        annot=p,
+    )
+    for child in grid.ax_heatmap.get_children():
+        if isinstance(child, matplotlib.text.Text):
+            if child.get_text() == "0":
+                child.set_visible(False)
+                child.remove()
+            elif child.get_text() == "1":
+                child.set_text("*")
+    grid.savefig(
+        output_dir / f"attribute_regression.subcellular_localization.svg",
+        **figkws,
+    )
 
 
 def correlate_with_RNA_score() -> None:
@@ -1187,7 +1167,126 @@ def tumor_cell_heterogeneity(a: anndata.AnnData) -> None:
     )
 
 
-if __name__ == "__main__":
+def illustrate_change_with_metastasis():
+    output_dir = results_dir / "illustration"
+    roi1 = prj.get_rois("20210310_PM249_D6-03")
+    roi2 = prj.get_rois("20210309_PM249_9-01")
+    channels = [
+        "CD8a(Dy162)",
+        "KRT5(Dy163)",
+        "PanKeratinC11(Nd148)",
+        "ColtypeI(Tm169)",
+        "GATA3(Eu153)",
+        "CD45(Sm152)",
+    ]
+    channels = [
+        "CD3(Er170)",
+        "KRT5(Dy163)",
+        "GATA3(Eu153)",
+        "PanKeratinC11(Nd148)",
+    ]
+    p1 = ((1000, 500), (900, 400))
+    p2 = ((650, 150), (550, 50))
+
+    fig, axes = plt.subplots(1, 2, figsize=(3 * 2, 3))
+    roi1.plot_channels(
+        channels, merged=True, position=p1, log=False, axes=[axes[0]]
+    )
+    roi2.plot_channels(
+        channels, merged=True, position=p2, log=False, axes=[axes[1]]
+    )
+    fig.savefig(output_dir / "PM249_illustration.svg", **figkws)
+
+
+def quantify_subcellular_localization():
+    import parmap
+    from skimage.morphology import binary_erosion, disk
+
+    def quantify(roi) -> DataFrame:
+        nucl_mask = roi.nuclei_mask.astype(int)
+        cell_mask = roi.cell_mask.astype(int)
+        cyto_mask = binary_erosion(cell_mask, disk(2))
+        cyto_mask[nucl_mask != 0] = 0
+        membr_mask = cell_mask.copy()
+        o = (nucl_mask > 0) | (cyto_mask > 0)
+        membr_mask[o] = 0
+        stack = roi.stack
+        n = stack[:, nucl_mask > 0].mean(1)
+        c = stack[:, cyto_mask.astype(int) > 0].mean(1)
+        m = stack[:, membr_mask > 0].mean(1)
+        e = stack[:, cell_mask == 0].mean(1)
+        return pd.DataFrame(
+            [n, c, m, e],
+            index=["nuclear", "cytoplasmatic", "membranar", "extracellular"],
+            columns=roi.channel_labels,
+        ).T
+        # # to visualize:
+        # p = np.zeros(roi.shape[1:], dtype=int)
+        # p[nucl_mask > 0] = 1
+        # p[cyto_mask.astype(int) > 0] = 2
+        # p[membr_mask > 0] = 3
+        # p[cell_mask == 0] = 4
+        # fig, ax = plt.subplots()
+        # ax.imshow(p, cmap='tab10')
+
+    _quants = parmap.map(quantify, prj.rois, pm_pbar=True)
+    quant = pd.concat(
+        [q.assign(roi=roi.name) for q, roi in zip(_quants, prj.rois)]
+    )
+    quant["nuclear_cytolasmatic_ratio"] = np.log2(
+        quant["nuclear"] / quant["cytoplasmatic"]
+    )
+    quant["cytoplasmatic_membranar_ratio"] = np.log2(
+        quant["cytoplasmatic"] / quant["membranar"]
+    )
+    quant["cellular_extracellular_ratio"] = np.log2(
+        quant[["nuclear", "cytoplasmatic", "membranar"]].mean(1)
+        / quant["extracellular"]
+    )
+    quant.to_csv(results_dir / "subcellular_quantification.whole_image.csv")
+
+    p = quant.groupby(level=0).mean()
+    p = p.loc[~p.index.str.contains("EMPTY")]
+    s = quant.groupby(level=0).std()
+    s = s.loc[~s.index.str.contains("EMPTY")]
+
+    conds = [
+        (
+            "cytoplasmatic_membranar_ratio",
+            "nuclear_cytolasmatic_ratio",
+            "cellular_extracellular_ratio",
+        ),
+        (
+            "cellular_extracellular_ratio",
+            "nuclear_cytolasmatic_ratio",
+            "cytoplasmatic_membranar_ratio",
+        ),
+    ]
+    fig, axes = plt.subplots(1, len(conds), figsize=(10 * len(conds), 10))
+    for ax, (x, y, z) in zip(axes, conds):
+        ax.errorbar(
+            x=p[x],
+            y=p[y],
+            yerr=s[y],
+            xerr=s[x],
+            linestyle="None",
+            marker="^",
+            ecolor="grey",
+            alpha=0.25,
+        )
+        ax.scatter(data=p, x=x, y=y, c=z, alpha=0.5)
+        ax.set(xlabel=x, ylabel=y)
+        for m in p.index:
+            ax.text(p.loc[m, x], p.loc[m, y], ha="center", va="center", s=m)
+    for ax in axes:
+        ax.axhline(0, color="grey", linestyle="--")
+        ax.axvline(0, color="grey", linestyle="--")
+    fig.savefig(
+        results_dir / "subcellular_quantification.whole_image.svg", **figkws
+    )
+
+
+if __name__ == "__main__" and "get_ipython" not in locals():
     try:
         sys.exit(main())
     except KeyboardInterrupt:
