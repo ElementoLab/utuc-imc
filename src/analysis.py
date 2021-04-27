@@ -1197,6 +1197,37 @@ def illustrate_change_with_metastasis():
     )
     fig.savefig(output_dir / "PM249_illustration.svg", **figkws)
 
+    output_dir = results_dir / "abundance"
+    output_dir.mkdir()
+    (
+        roi_counts,
+        roi_areas,
+        sample_counts,
+        sample_areas,
+    ) = generate_count_matrices()
+
+    counts_mm2 = (roi_counts.T / roi_areas).T * 1e6
+
+    sa = roi_attributes.copy()
+    sa["patient"] = sa.index.str.extract(r"\d+_(PM\d+).*")[0].values
+
+    x = counts_mm2.join(sa)
+    pats = x.groupby("patient").size()
+    x = x.loc[x["patient"].isin(pats[pats > 1].index)]
+
+    fig, stats = swarmboxenplot(
+        data=x.reset_index(),
+        x="patient",
+        y=counts_mm2.columns,
+        hue="Primary/Metastasis",
+        plot_kws=dict(palette=colors["Primary/Metastasis"]),
+    )
+    fig.savefig(
+        output_dir
+        / "cell_types_per_patient.Primary_Metastasis.per_roi.swarmboxenplot.svg",
+        **figkws,
+    )
+
 
 def quantify_subcellular_localization():
     import parmap
