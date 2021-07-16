@@ -760,6 +760,9 @@ def differential_abundance() -> None:
         # # per mm2
         dfarea = (df.T / area).T * 1e6
         df2area = (df2.T / area).T * 1e6
+        df2area.rename_axis(grouping).to_excel(
+            f"manuscript/cell_counts_per_mm2.per_{grouping}.xlsx"
+        )
 
         kws = dict(
             config="abs",
@@ -768,9 +771,9 @@ def differential_abundance() -> None:
             cbar_kws=dict(label="Cells (%)"),
         )
         grid = clustermap(dfp, **kws)
-        grid.savefig(output_prefix + f"percentage.svg", **figkws)
+        grid.savefig(output_prefix + "percentage.svg", **figkws)
         grid = clustermap(df2p, **kws)
-        grid.savefig(output_prefix + f"percentage.meta.svg", **figkws)
+        grid.savefig(output_prefix + "percentage.meta.svg", **figkws)
 
         kws = dict(
             config="abs",
@@ -779,9 +782,9 @@ def differential_abundance() -> None:
             cbar_kws=dict(label="Cells per mm2"),
         )
         grid = clustermap(dfarea, **kws)
-        grid.savefig(output_prefix + f"per_mm2.svg", **figkws)
+        grid.savefig(output_prefix + "per_mm2.svg", **figkws)
         grid = clustermap(df2area, **kws)
-        grid.savefig(output_prefix + f"per_mm2.meta.svg", **figkws)
+        grid.savefig(output_prefix + "per_mm2.meta.svg", **figkws)
         plt.close("all")
 
     # # Swarmboxenplots
@@ -1036,6 +1039,7 @@ def tumor_cell_heterogeneity(a: anndata.AnnData) -> None:
     sas = ((sa - sa.min()) / (sa.max() - sa.min())) + 0.1
     pc_position = np.log(sas[tumor_markers[1]] / sas[tumor_markers[0]]).sort_values()
     sa = sa.reindex(pc_position.index)
+    sa.to_excel("manuscript/Fig5h.xlsx")
 
     fig, ax = plt.subplots(1, 1, figsize=(4, 4))
     ax.scatter(
@@ -1073,7 +1077,10 @@ def tumor_cell_heterogeneity(a: anndata.AnnData) -> None:
     sc.pp.scale(sa)
     sc.pp.pca(sa)
     p = sa.obs[["sample"]].assign(pca=-sa.obsm["X_pca"][:, 0])
+    p.to_excel("manuscript/Fig5i.xlsx", index=False)
     order = p.groupby("sample")["pca"].median().sort_values()
+
+    sa = sa.to_df().groupby(sa.obs["sample"]).mean()
 
     fig, ax = plt.subplots(1, 1, figsize=(4, 4))
     ax.axvline(0, linestyle="--", color="gray")
