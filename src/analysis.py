@@ -5,9 +5,7 @@ Analysis of imaging mass cytometry data for a cohort of
 upper tract urothelial cancer patients
 """
 
-
-from typing import Callable, List, Tuple
-import sys, re, json
+import sys, re, json, typing as tp
 from argparse import ArgumentParser
 
 import anndata
@@ -132,6 +130,29 @@ def main(cli=None) -> int:
 
     # Illustrate tumor and immune phenotype differences between primary and metastasis
     illustrate_change_with_metastasis()
+
+    # Label topological domains
+    from imc.operations import (
+        label_domains,
+        collect_domains,
+        illustrate_domains,
+        get_domains_per_cell,
+    )
+
+    output_dir = results_dir / "domains"
+    label_domains(
+        [prj.rois[0]],
+        output_dir,
+        channels=["Keratin", "CD", "DNA"],
+        overwrite=True,
+    )
+    topo_annots = collect_domains(output_dir)
+    with open(metadata_dir / "domain_annotations.json", "w") as handle:
+        json.dump(topo_annots, handle, indent=4)
+    illustrate_domains(
+        topo_annots, prj.rois, output_dir, channels=["Keratin", "Coltype", "DNA"]
+    )
+    get_domains_per_cell(topo_annots, prj.rois)
 
     return 0
 
@@ -535,8 +556,8 @@ def phenotyping_t_cells(args, suffix=".cd4_tcell_clustered") -> None:
 
 def illustrate_phenotypes(
     a: anndata.AnnData,
-    channels: List[str],
-    labels: List[str],
+    channels: tp.Sequence[str],
+    labels: tp.Sequence[str],
     overwrite: bool = False,
     suffix: str = "",
     remove_files: bool = False,
@@ -641,7 +662,7 @@ def _plot_roi(
     plt.close(fig)
 
 
-def get_scanpy_func(algo: str) -> Callable:
+def get_scanpy_func(algo: str) -> tp.Callable:
     if algo != "pymde":
         return getattr(sc.pl, algo)
     return partial(sc.pl.scatter, basis="pymde")
@@ -660,7 +681,7 @@ def generate_count_matrices(
     var: str = "cell_type",
     exclude_pattern: str = r"\?",
     overwrite: bool = False,
-) -> Tuple[DataFrame, DataFrame, DataFrame, DataFrame]:
+) -> tp.Tuple[DataFrame, DataFrame, DataFrame, DataFrame]:
     # Let's generate some dataframes that will be useful later:
     # # counts of cells per image, per cluster
     if (not roi_counts_file.exists()) or overwrite:
