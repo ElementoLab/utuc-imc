@@ -1,0 +1,18 @@
+{
+  "metadata": {
+    "upload_type": "dataset",
+    "title": "The evolution of genomic, transcriptomic, and single-cell protein markers of metastatic upper tract urothelial carcinoma",
+    "description": "The molecular characteristics of metastatic upper tract urothelial carcinoma (UTUC) are unknown. The genomic and transcriptomic differences between primary and metastatic UTUC is not well described either. We combined whole-exome sequencing, RNA-sequencing, and Imaging Mass CytometryTM (IMCTM) of 44 tumor samples from 28 patients with high-grade primary and metastatic UTUC. IMC enables spatially resolved single-cell analyses to examine the evolution of cancer cell, immune cell, and stromal cell markers using mass cytometry with lanthanide metal-conjugated antibodies. We discovered that actionable genomic alterations are frequently discordant between primary and metastatic UTUC tumors in the same patient. In contrast, molecular subtype membership and immune depletion signature were stable across primary and matched metastatic UTUC. Molecular and immune subtypes were consistent between bulk RNA-sequencing and mass cytometry of protein markers from 340,798 single-cells. Molecular subtyping at the single cell level was highly conserved between primary and metastatic UTUC tumors within the same patient.",
+    "notes": "We make available a dataset of imaging mass cytometry samples from upper tract urothelial carcinoma part of the study from Ohara et al: http://dx.doi.org/10.1101/2021.11.16.468622",
+    "access_right": "open",
+    "license": "cc-by-nc-4.0",
+    "keywords": [
+      "COVID-19",
+      "cancer",
+      "bladder",
+      "imaging mass cytometry",
+      "multiplexed imaging",
+      "pathology"],
+  "language": "eng"     
+  }
+}
