@@ -131,29 +131,6 @@ def main(cli=None) -> int:
     # Illustrate tumor and immune phenotype differences between primary and metastasis
     illustrate_change_with_metastasis()
 
-    # Label topological domains
-    from imc.operations import (
-        label_domains,
-        collect_domains,
-        illustrate_domains,
-        get_domains_per_cell,
-    )
-
-    output_dir = results_dir / "domains"
-    label_domains(
-        [prj.rois[0]],
-        output_dir,
-        channels=["Keratin", "CD", "DNA"],
-        overwrite=True,
-    )
-    topo_annots = collect_domains(output_dir)
-    with open(metadata_dir / "domain_annotations.json", "w") as handle:
-        json.dump(topo_annots, handle, indent=4)
-    illustrate_domains(
-        topo_annots, prj.rois, output_dir, channels=["Keratin", "Coltype", "DNA"]
-    )
-    get_domains_per_cell(topo_annots, prj.rois)
-
     return 0
 
 
